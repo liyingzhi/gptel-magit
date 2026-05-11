@@ -10,6 +10,9 @@ Functionality is provided for:
 
 - Generating commit messages
 - Explaining diffs
+- Optional rationale input before commit generation
+- Streaming commit generation
+- Selectable commit message styles
 
 * Installation
 
@@ -33,13 +36,37 @@ You can generate a commit message in two ways:
 2. In an already started git-commit buffer, you can press =M-g= to
    generate a message.
 
+You can also provide extra rationale for why a change was made:
+
+1. In the magit transient commit buffer, press =r= to generate a
+   commit message after entering optional rationale text.
+2. In an already started git-commit buffer, press =M-r= to open a
+   rationale buffer, then press =C-c C-c= to continue or =C-c C-k= to
+   cancel.
+
 ** Diff explanation
 
 With the cursor placed on a magit diff section, you can request an
 explanation by pressing =d= (to invoke the diff action), and then =x=.
 
+Use =C-u x= from the diff transient to explain the entire visible diff
+buffer instead of only the current section.
+
 
 * Customisation
 
-Prompts, and some other options can be customised, see
-`customize-group magit-gptel`.
+Prompts and request behaviour can be customised via
+=M-x customize-group RET gptel-magit RET=.
+
+Useful options include:
+
+- =gptel-magit-commit-styles-alist= and =gptel-magit-set-commit-style=
+  for selecting between Conventional Commits, ZED style, and GNU style
+  prompts.
+- =gptel-magit-body-length= for adding body line-length guidance when
+  using the Conventional Commits prompt.
+- =gptel-magit-streaming= to control whether commit messages are
+  inserted incrementally as the model responds.
+- =gptel-magit-include-reasoning= to opt into model reasoning output.
+  It defaults to =nil= because gptel-magit expects plain text responses
+  for commit messages and diff explanations.
