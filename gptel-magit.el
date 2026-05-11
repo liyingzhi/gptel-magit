@@ -176,6 +176,11 @@ See `gptel-backend` for documentation."
 (defvar-local gptel-magit--generating-overlay nil
   "Overlay used to show a temporary generating hint in commit buffers.")
 
+(defface gptel-magit-generating-hint
+  '((t :inherit font-lock-comment-face :slant italic))
+  "Face used for the temporary generating hint."
+  :group 'gptel-magit)
+
 
 (defun gptel-magit-set-commit-style (style-name)
   "Set `gptel-magit-commit-prompt` from STYLE-NAME.
@@ -216,8 +221,9 @@ STYLE-NAME must exist in `gptel-magit-commit-styles-alist`."
     (with-current-buffer buffer
       (gptel-magit--clear-generating-overlay)
       (let ((overlay (make-overlay position position buffer nil t)))
-        (overlay-put overlay 'after-string
-                     (propertize "Generating..." 'face 'shadow))
+        (overlay-put overlay 'before-string
+                     (propertize "Generating..."
+                                 'face 'gptel-magit-generating-hint))
         (overlay-put overlay 'evaporate t)
         (overlay-put overlay 'priority 1000)
         (setq-local gptel-magit--generating-overlay overlay)))))
@@ -256,6 +262,11 @@ Respects configured model/backend options."
          (gptel-include-reasoning gptel-magit-include-reasoning))
     (apply #'gptel-request args)))
 
+
+(defun gptel-magit--request-later (&rest args)
+  "Schedule `gptel-magit--request` with ARGS for the next event loop turn."
+  (apply #'run-at-time 0 nil #'gptel-magit--request args))
+
 (defun gptel-magit--generate (callback &optional rationale)
   "Generate a commit message for current magit repo.
 Invokes CALLBACK with the generated message when done.
@@ -274,8 +285,9 @@ Optional RATIONALE provides extra context for why the change was made."
       (with-current-buffer commit-buffer
         (setq start-marker (copy-marker (point-min)))
         (setq end-marker (copy-marker (point-min)))
-        (gptel-magit--show-generating-overlay commit-buffer start-marker)))
-    (gptel-magit--request prompt
+        (gptel-magit--show-generating-overlay commit-buffer start-marker)
+        (redisplay t)))
+    (gptel-magit--request-later prompt
       :system (gptel-magit--get-commit-prompt)
       :context nil
       :stream gptel-magit-streaming
