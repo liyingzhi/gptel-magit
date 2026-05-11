@@ -248,6 +248,35 @@ If BUFFER is nil, operate on the current buffer."
           (setq-local gptel-magit--generating-overlay nil))))))
 
 
+(defun gptel-magit--commit-preserved-tail-start ()
+  "Return where the preserved tail of the commit buffer should start.
+
+The preserved tail begins two lines before the first comment line so
+that the standard blank separation before Git's instructions remains
+visible." 
+  (save-excursion
+    (goto-char (point-min))
+    (if (re-search-forward (format "^%s" (regexp-quote comment-start)) nil t)
+        (let ((comment-start-pos (line-beginning-position)))
+          (goto-char comment-start-pos)
+          (forward-line -2)
+          (max (point-min) (line-beginning-position)))
+      (point-max))))
+
+
+(defun gptel-magit--clear-commit-edit-region (buffer)
+  "Clear the editable portion of commit BUFFER.
+
+Any comment section and the two lines immediately before it are left
+untouched.  Return the position where new generated text should be
+inserted." 
+  (with-current-buffer buffer
+    (let ((inhibit-read-only t)
+          (limit (gptel-magit--commit-preserved-tail-start)))
+      (delete-region (point-min) limit)
+      (point-min))))
+
+
 (defun gptel-magit--format-commit-message (message)
   "Format commit message MESSAGE nicely."
   (with-temp-buffer
@@ -290,8 +319,9 @@ Optional RATIONALE provides extra context for why the change was made."
          (end-marker nil))
     (when commit-buffer
       (with-current-buffer commit-buffer
-        (setq start-marker (copy-marker (point-min)))
-        (setq end-marker (copy-marker (point-min)))
+        (let ((insert-start (gptel-magit--clear-commit-edit-region commit-buffer)))
+          (setq start-marker (copy-marker insert-start))
+          (setq end-marker (copy-marker insert-start)))
         (gptel-magit--show-generating-overlay commit-buffer start-marker)
         (when (overlayp gptel-magit--generating-overlay)
           (set-marker start-marker (overlay-end gptel-magit--generating-overlay))
