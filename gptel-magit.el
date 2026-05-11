@@ -220,13 +220,15 @@ STYLE-NAME must exist in `gptel-magit-commit-styles-alist`."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (gptel-magit--clear-generating-overlay)
-      (let ((overlay (make-overlay position position buffer nil t)))
-        (overlay-put overlay 'before-string
-                     (propertize "Generating..."
-                                 'face 'gptel-magit-generating-hint))
-        (overlay-put overlay 'evaporate t)
+      (let ((hint "Generating...\n"))
+        (save-excursion
+          (goto-char position)
+          (insert hint))
+        (let ((overlay (make-overlay position (+ position (length hint))
+                                     buffer nil t)))
+          (overlay-put overlay 'face 'gptel-magit-generating-hint)
         (overlay-put overlay 'priority 1000)
-        (setq-local gptel-magit--generating-overlay overlay)))))
+          (setq-local gptel-magit--generating-overlay overlay))))))
 
 
 (defun gptel-magit--clear-generating-overlay (&optional buffer)
@@ -237,7 +239,12 @@ If BUFFER is nil, operate on the current buffer."
     (when (buffer-live-p target-buffer)
       (with-current-buffer target-buffer
         (when (overlayp gptel-magit--generating-overlay)
+          (let ((start (overlay-start gptel-magit--generating-overlay))
+                (end (overlay-end gptel-magit--generating-overlay))
+                (inhibit-read-only t))
           (delete-overlay gptel-magit--generating-overlay)
+            (when (and start end)
+              (delete-region start end)))
           (setq-local gptel-magit--generating-overlay nil))))))
 
 
@@ -286,6 +293,9 @@ Optional RATIONALE provides extra context for why the change was made."
         (setq start-marker (copy-marker (point-min)))
         (setq end-marker (copy-marker (point-min)))
         (gptel-magit--show-generating-overlay commit-buffer start-marker)
+        (when (overlayp gptel-magit--generating-overlay)
+          (set-marker start-marker (overlay-end gptel-magit--generating-overlay))
+          (set-marker end-marker (overlay-end gptel-magit--generating-overlay)))
         (redisplay t)))
     (gptel-magit--request-later prompt
       :system (gptel-magit--get-commit-prompt)
