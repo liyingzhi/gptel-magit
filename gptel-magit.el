@@ -173,6 +173,9 @@ See `gptel-backend` for documentation."
 (defvar gptel-magit--current-commit-buffer nil
   "Commit message buffer associated with rationale input.")
 
+(defvar-local gptel-magit--generating-overlay nil
+  "Overlay used to show a temporary generating hint in commit buffers.")
+
 
 (defun gptel-magit-set-commit-style (style-name)
   "Set `gptel-magit-commit-prompt` from STYLE-NAME.
@@ -205,6 +208,31 @@ STYLE-NAME must exist in `gptel-magit-commit-styles-alist`."
   "Display an error message derived from request INFO."
   (message "gptel-magit error: %s"
            (or (plist-get info :status) "unknown status")))
+
+
+(defun gptel-magit--show-generating-overlay (buffer position)
+  "Display a temporary generating hint in BUFFER at POSITION."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (gptel-magit--clear-generating-overlay)
+      (let ((overlay (make-overlay position position buffer nil t)))
+        (overlay-put overlay 'after-string
+                     (propertize "Generating..." 'face 'shadow))
+        (overlay-put overlay 'evaporate t)
+        (overlay-put overlay 'priority 1000)
+        (setq-local gptel-magit--generating-overlay overlay)))))
+
+
+(defun gptel-magit--clear-generating-overlay (&optional buffer)
+  "Remove the temporary generating hint from BUFFER.
+
+If BUFFER is nil, operate on the current buffer."
+  (when-let ((target-buffer (or buffer (current-buffer))))
+    (when (buffer-live-p target-buffer)
+      (with-current-buffer target-buffer
+        (when (overlayp gptel-magit--generating-overlay)
+          (delete-overlay gptel-magit--generating-overlay)
+          (setq-local gptel-magit--generating-overlay nil))))))
 
 
 (defun gptel-magit--format-commit-message (message)
@@ -245,7 +273,8 @@ Optional RATIONALE provides extra context for why the change was made."
     (when commit-buffer
       (with-current-buffer commit-buffer
         (setq start-marker (copy-marker (point-min)))
-        (setq end-marker (copy-marker (point-min)))))
+        (setq end-marker (copy-marker (point-min)))
+        (gptel-magit--show-generating-overlay commit-buffer start-marker)))
     (gptel-magit--request prompt
       :system (gptel-magit--get-commit-prompt)
       :context nil
@@ -259,6 +288,7 @@ Optional RATIONALE provides extra context for why the change was made."
            ((and commit-buffer (plist-get info :stream))
             (when (buffer-live-p commit-buffer)
               (with-current-buffer commit-buffer
+                (gptel-magit--clear-generating-overlay)
                 (save-excursion
                   (goto-char end-marker)
                   (insert response)
@@ -266,12 +296,15 @@ Optional RATIONALE provides extra context for why the change was made."
            ((plist-get info :stream)
             nil)
            (t
+            (when commit-buffer
+              (gptel-magit--clear-generating-overlay commit-buffer))
             (funcall callback (gptel-magit--format-commit-message acc)))))
          ((eq response t)
           (let ((message (gptel-magit--format-commit-message acc)))
             (if (and commit-buffer start-marker end-marker)
                 (when (buffer-live-p commit-buffer)
                   (with-current-buffer commit-buffer
+                    (gptel-magit--clear-generating-overlay)
                     (save-excursion
                       (delete-region start-marker end-marker)
                       (goto-char start-marker)
@@ -280,6 +313,8 @@ Optional RATIONALE provides extra context for why the change was made."
          ((and (consp response) (eq (car response) 'reasoning))
           nil)
          ((or (null response) (eq response 'abort))
+          (when commit-buffer
+            (gptel-magit--clear-generating-overlay commit-buffer))
           (gptel-magit--request-error info)))))))
 
 (defun gptel-magit-generate-message ()
