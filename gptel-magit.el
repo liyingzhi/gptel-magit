@@ -137,6 +137,15 @@ message when the stream completes."
   :type 'boolean
   :group 'gptel-magit)
 
+(defcustom gptel-magit-include-reasoning nil
+  "Whether gptel-magit requests should include model reasoning.
+
+Commit-message generation and diff explanations consume plain text
+responses, so reasoning is disabled by default to avoid surfacing
+reasoning payloads in user-facing buffers."
+  :type 'boolean
+  :group 'gptel-magit)
+
 (custom-declare-variable
  'gptel-magit-model nil
  "The gptel model to use, defaults to `gptel-model` if nil.
@@ -215,7 +224,8 @@ STYLE-NAME must exist in `gptel-magit-commit-styles-alist`."
 Respects configured model/backend options."
   (declare (indent 1))
   (let* ((gptel-backend (or gptel-magit-backend gptel-backend))
-         (gptel-model (or gptel-magit-model gptel-model)))
+         (gptel-model (or gptel-magit-model gptel-model))
+         (gptel-include-reasoning gptel-magit-include-reasoning))
     (apply #'gptel-request args)))
 
 (defun gptel-magit--generate (callback &optional rationale)
