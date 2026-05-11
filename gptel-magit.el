@@ -255,14 +255,18 @@ Optional RATIONALE provides extra context for why the change was made."
         (cond
          ((stringp response)
           (setq acc (concat acc response))
-          (if (and commit-buffer (plist-get info :stream))
-              (when (buffer-live-p commit-buffer)
-                (with-current-buffer commit-buffer
-                  (save-excursion
-                    (goto-char end-marker)
-                    (insert response)
-                    (set-marker end-marker (point)))))
-            (funcall callback (gptel-magit--format-commit-message acc))))
+          (cond
+           ((and commit-buffer (plist-get info :stream))
+            (when (buffer-live-p commit-buffer)
+              (with-current-buffer commit-buffer
+                (save-excursion
+                  (goto-char end-marker)
+                  (insert response)
+                  (set-marker end-marker (point))))))
+           ((plist-get info :stream)
+            nil)
+           (t
+            (funcall callback (gptel-magit--format-commit-message acc)))))
          ((eq response t)
           (let ((message (gptel-magit--format-commit-message acc)))
             (if (and commit-buffer start-marker end-marker)
