@@ -20,6 +20,37 @@
 (require 'gptel)
 (require 'magit)
 
+(defconst gptel-magit-prompt-gnu-style
+  "You are an expert at writing Git commits in the GNU/Emacs ChangeLog style.
+Your job is to write a detailed, clear commit message that summarizes the changes with technical precision.
+
+### TRIVIAL CHANGES RULE:
+- If the change is trivial (e.g., fixing a typo, adjusting indentation, or purely cosmetic), START the commit message with a semicolon (;).
+- For trivial changes, provide only a concise one-line summary.
+- Example: \"; gptel: Fix typo in docstring\"
+- DO NOT use the bulleted ChangeLog format for trivial changes.
+
+### FUNCTIONAL CHANGES RULE:
+
+For all non-trivial changes, use the following structure:
+
+    <component>: <short summary>
+
+    * <file-name> (<function-name>): <detailed description of changes>.
+    [optional additional entries for other files/functions]
+
+- MANDATORY: Use asterisk (*) ONLY at the start of a file entry.
+- MANDATORY: Indent continuation lines. NEVER start a line with an asterisk unless it's a NEW file/function.
+- DO NOT repeat the filename at the end of paragraphs.
+- The first line (subject) MUST start with the component or file prefix followed by a colon.
+- The subject line MUST be in the imperative mood and max 66 characters.
+- DO NOT use conventional commit prefixes like fix: or feat:.
+- The body MUST use the ChangeLog format: asterisk, filename, function name in parentheses, and the why/how.
+- If multiple functions or files changed, provide a separate bullet point for each.
+- Do not end the subject line with any punctuation.
+- Use a professional, technical, and descriptive tone."
+  "Prompt for GNU/Emacs ChangeLog-style commit messages.")
+
 (defconst gptel-magit-prompt-zed
   "You are an expert at writing Git commits. Your job is to write a short clear commit message that summarizes the changes.
 
@@ -62,6 +93,26 @@ The commit message should be structured as follows:
 - Keep the body short and concise (omit it entirely if not useful)"
   "A prompt adapted from Conventional Commits (https://www.conventionalcommits.org/en/v1.0.0/).")
 
+(defcustom gptel-magit-commit-styles-alist
+  `(("GNU Style" . ,gptel-magit-prompt-gnu-style)
+    ("ZED Style" . ,gptel-magit-prompt-zed)
+    ("Conventional Commits" . ,gptel-magit-prompt-conventional-commits))
+  "Alist of named commit-message styles.
+
+Each element maps a style name to the prompt text used when
+generating commit messages."
+  :type '(repeat (cons (string :tag "Style Name")
+                       (string :tag "Prompt Text")))
+  :group 'gptel-magit)
+
+(defcustom gptel-magit-body-length nil
+  "Maximum character length for commit message body lines.
+
+If nil, no body-length guidance is added to the prompt."
+  :type '(choice (const :tag "No constraint" nil)
+                 (integer :tag "Character limit"))
+  :group 'gptel-magit)
+
 (defcustom gptel-magit-commit-prompt
   gptel-magit-prompt-conventional-commits
   "The prompt to use for generating a commit message.
@@ -75,6 +126,15 @@ staged changes."
   "The prompt to use for explaining diff changes.
 The prompt should consider that the input will be a diff some changes."
   :type 'string
+  :group 'gptel-magit)
+
+(defcustom gptel-magit-streaming t
+  "Whether to request streaming responses from the LLM.
+
+When non-nil, streamed commit generation inserts chunks into the
+commit buffer as they arrive and replaces them with the formatted
+message when the stream completes."
+  :type 'boolean
   :group 'gptel-magit)
 
 (custom-declare-variable
@@ -98,13 +158,55 @@ See `gptel-backend` for documentation."
  :group 'gptel-magit)
 
 
+(defvar gptel-magit-rationale-buffer "*gptel-magit Rationale*"
+  "Buffer name used to collect rationale before commit generation.")
+
+(defvar gptel-magit--current-commit-buffer nil
+  "Commit message buffer associated with rationale input.")
+
+
+(defun gptel-magit-set-commit-style (style-name)
+  "Set `gptel-magit-commit-prompt` from STYLE-NAME.
+
+STYLE-NAME must exist in `gptel-magit-commit-styles-alist`."
+  (interactive
+   (list
+    (completing-read "Choose commit style for gptel-magit: "
+                     (mapcar #'car gptel-magit-commit-styles-alist)
+                     nil t)))
+  (let ((style (assoc style-name gptel-magit-commit-styles-alist)))
+    (unless style
+      (user-error "Unknown commit style: %s" style-name))
+    (setq gptel-magit-commit-prompt (cdr style))
+    (message "gptel-magit commit style set to '%s'" style-name)))
+
+
+(defun gptel-magit--get-commit-prompt ()
+  "Return the effective prompt for commit generation."
+  (if (and gptel-magit-body-length
+           (string= gptel-magit-commit-prompt
+                    gptel-magit-prompt-conventional-commits))
+      (concat gptel-magit-prompt-conventional-commits
+              (format "\n- Try to limit body lines to %d characters"
+                      gptel-magit-body-length))
+    gptel-magit-commit-prompt))
+
+
+(defun gptel-magit--request-error (info)
+  "Display an error message derived from request INFO."
+  (message "gptel-magit error: %s"
+           (or (plist-get info :status) "unknown status")))
+
+
 (defun gptel-magit--format-commit-message (message)
   "Format commit message MESSAGE nicely."
   (with-temp-buffer
     (insert message)
     (text-mode)
     (setq fill-column git-commit-summary-max-length)
-    (fill-region (point-min) (point-max))
+    (goto-char (point-min))
+    (let ((end-of-first-line (progn (end-of-line) (point))))
+      (fill-region (point-min) end-of-first-line))
     (buffer-string)))
 
 (defun gptel-magit--request (&rest args)
@@ -116,16 +218,55 @@ Respects configured model/backend options."
          (gptel-model (or gptel-magit-model gptel-model)))
     (apply #'gptel-request args)))
 
-(defun gptel-magit--generate (callback)
+(defun gptel-magit--generate (callback &optional rationale)
   "Generate a commit message for current magit repo.
-Invokes CALLBACK with the generated message when done."
-  (let ((diff (magit-git-output "diff" "--cached")))
-    (gptel-magit--request diff
-      :system gptel-magit-commit-prompt
+Invokes CALLBACK with the generated message when done.
+
+Optional RATIONALE provides extra context for why the change was made."
+  (let* ((diff (magit-git-output "diff" "--cached"))
+         (prompt (if (and rationale (not (string-empty-p rationale)))
+                     (format "Why this change was made: %s\n\nCode changes:\n%s"
+                             rationale diff)
+                   diff))
+         (commit-buffer (magit-commit-message-buffer))
+         (acc "")
+         (start-marker nil)
+         (end-marker nil))
+    (when commit-buffer
+      (with-current-buffer commit-buffer
+        (setq start-marker (copy-marker (point-min)))
+        (setq end-marker (copy-marker (point-min)))))
+    (gptel-magit--request prompt
+      :system (gptel-magit--get-commit-prompt)
       :context nil
-      :callback (lambda (response _info)
-                  (let ((msg (gptel-magit--format-commit-message response)))
-                    (funcall callback msg))))))
+      :stream gptel-magit-streaming
+      :callback
+      (lambda (response info)
+        (cond
+         ((stringp response)
+          (setq acc (concat acc response))
+          (if (and commit-buffer (plist-get info :stream))
+              (when (buffer-live-p commit-buffer)
+                (with-current-buffer commit-buffer
+                  (save-excursion
+                    (goto-char end-marker)
+                    (insert response)
+                    (set-marker end-marker (point)))))
+            (funcall callback (gptel-magit--format-commit-message acc))))
+         ((eq response t)
+          (let ((message (gptel-magit--format-commit-message acc)))
+            (if (and commit-buffer start-marker end-marker)
+                (when (buffer-live-p commit-buffer)
+                  (with-current-buffer commit-buffer
+                    (save-excursion
+                      (delete-region start-marker end-marker)
+                      (goto-char start-marker)
+                      (insert message))))
+              (funcall callback message))))
+         ((and (consp response) (eq (car response) 'reasoning))
+          nil)
+         ((or (null response) (eq response 'abort))
+          (gptel-magit--request-error info)))))))
 
 (defun gptel-magit-generate-message ()
   "Generate a commit message when in the git commit buffer."
@@ -167,25 +308,129 @@ Uses ARGS from transient mode."
   (gptel-magit--request diff
     :system gptel-magit-diff-explain-prompt
     :context nil
-    :callback (lambda (response _info)
-                (gptel-magit--show-diff-explain response)))
+    :callback (lambda (response info)
+                (cond
+                 ((stringp response)
+                  (gptel-magit--show-diff-explain response))
+                 ((and (consp response) (eq (car response) 'reasoning))
+                  nil)
+                 ((or (null response) (eq response 'abort))
+                  (gptel-magit--request-error info)))))
   (message "magit-gptel: Explaining diff..."))
 
-(defun gptel-magit-diff-explain ()
+(defun gptel-magit-diff-explain (&optional arg)
   "Ask for an explanation of diff at current section."
+  (interactive "P")
+  (if arg
+      (gptel-magit--do-diff-request (buffer-string))
+    (when-let* ((section (magit-current-section))
+                (start (oref section content))
+                (end (oref section end))
+                (content (buffer-substring start end)))
+      (gptel-magit--do-diff-request content))))
+
+
+(define-derived-mode gptel-magit-rationale-mode text-mode "gptel-magit-Rationale"
+  "Major mode for entering commit rationale."
+  (local-set-key (kbd "C-c C-c") #'gptel-magit--submit-rationale)
+  (local-set-key (kbd "C-c C-k") #'gptel-magit--cancel-rationale))
+
+
+(defun gptel-magit--setup-rationale-buffer ()
+  "Prepare the rationale buffer with usage instructions."
+  (let ((inhibit-read-only t))
+    (erase-buffer)
+    (insert ";;; WHY are you making these changes? (optional)\n")
+    (insert ";;; Press C-c C-c to generate commit message, C-c C-k to cancel\n")
+    (insert ";;; Leave empty to generate without rationale\n\n")
+    (add-text-properties (point-min) (point)
+                         '(face font-lock-comment-face read-only t))
+    (goto-char (point-max))))
+
+
+(defun gptel-magit--rationale-text ()
+  "Return the editable rationale text from the current buffer."
+  (string-trim
+   (buffer-substring-no-properties
+    (save-excursion
+      (goto-char (point-min))
+      (while (and (not (eobp))
+                  (get-text-property (point) 'read-only))
+        (forward-char))
+      (point))
+    (point-max))))
+
+
+(defun gptel-magit--submit-rationale ()
+  "Submit the rationale buffer and generate a commit message."
   (interactive)
-  (when-let* ((section (magit-current-section))
-              (start (oref section content))
-              (end (oref section end))
-              (content (buffer-substring start end)))
-    (gptel-magit--do-diff-request content)))
+  (let ((rationale (gptel-magit--rationale-text)))
+    (quit-window t)
+    (gptel-magit--generate
+     (lambda (message)
+       (when (buffer-live-p gptel-magit--current-commit-buffer)
+         (with-current-buffer gptel-magit--current-commit-buffer
+           (save-excursion
+             (goto-char (point-min))
+             (insert message)))))
+     rationale)
+    (message "magit-gptel: Generating commit message with rationale...")))
+
+
+(defun gptel-magit--cancel-rationale ()
+  "Cancel rationale input."
+  (interactive)
+  (quit-window t)
+  (message "Commit generation canceled."))
+
+
+(defun gptel-magit-generate-message-with-rationale ()
+  "Generate a commit message with an optional rationale."
+  (interactive)
+  (unless (magit-commit-message-buffer)
+    (user-error "No commit in progress"))
+  (setq gptel-magit--current-commit-buffer (magit-commit-message-buffer))
+  (let ((buffer (get-buffer-create gptel-magit-rationale-buffer)))
+    (with-current-buffer buffer
+      (gptel-magit-rationale-mode)
+      (gptel-magit--setup-rationale-buffer))
+    (pop-to-buffer buffer)))
+
+
+(defun gptel-magit-commit-generate-with-rationale (&optional args)
+  "Create a commit with a generated message and optional rationale.
+
+Uses ARGS from transient mode."
+  (interactive (list (magit-commit-arguments)))
+  (setq gptel-magit--current-commit-buffer nil)
+  (let ((buffer (get-buffer-create gptel-magit-rationale-buffer)))
+    (with-current-buffer buffer
+      (gptel-magit-rationale-mode)
+      (gptel-magit--setup-rationale-buffer)
+      (local-set-key
+       (kbd "C-c C-c")
+       (lambda ()
+         (interactive)
+         (let ((rationale (gptel-magit--rationale-text)))
+           (quit-window t)
+           (gptel-magit--generate
+            (lambda (message)
+              (magit-commit-create
+               (append args `("--message" ,message "--edit"))))
+            rationale)
+           (message "magit-gptel: Generating commit with rationale...")))))
+    (pop-to-buffer buffer)))
 
 ;;;###autoload
 (defun gptel-magit-install ()
   "Install gptel-magit functionality."
   (define-key git-commit-mode-map (kbd "M-g") 'gptel-magit-generate-message)
+  (define-key git-commit-mode-map (kbd "M-r")
+    'gptel-magit-generate-message-with-rationale)
   (transient-append-suffix 'magit-commit #'magit-commit-create
     '("g" "Generate commit" gptel-magit-commit-generate))
+  (transient-append-suffix 'magit-commit #'gptel-magit-commit-generate
+    '("r" "Generate with rationale" gptel-magit-commit-generate-with-rationale))
   (transient-append-suffix 'magit-diff #'magit-stash-show
     '("x" "Explain" gptel-magit-diff-explain)))
 
