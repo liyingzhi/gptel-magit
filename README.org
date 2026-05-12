@@ -1,10 +1,29 @@
 #+title: gptel-magit: LLM functionality for magit
 
-[[https://stable.melpa.org/#/gptel-magit][file:https://melpa.org/packages/gptel-magit-badge.svg]]
+* Fork notes
+
+Compared with the inactive upstream repository, this fork currently
+includes maintained documentation and several functional updates,
+including merged PRs for selectable commit styles, rationale input,
+streaming commit generation, diff explanation, and per-package gptel
+backend/model customisation.
+
+Recent fork-specific improvements also refine the commit-generation
+flow: reasoning payloads are disabled by default, streaming callbacks
+are handled correctly, and commit buffers now show progress immediately
+while keeping regeneration tidy.
 
 Uses the fantastic [[https://github.com/karthink/gptel][gptel]] to
 extend the equally fantastic [[https://magit.vc/][magit]] with some
 LLM-powered functionality.
+
+This repository is an actively maintained fork of
+[[https://github.com/ragnard/gptel-magit][ragnard/gptel-magit]].
+The upstream repository has been inactive for a while, and this fork
+includes merged community PRs plus additional fixes and quality-of-life
+improvements.
+
+* Introduction
 
 Functionality is provided for:
 
@@ -13,6 +32,12 @@ Functionality is provided for:
 - Optional rationale input before commit generation
 - Streaming commit generation
 - Selectable commit message styles
+- Per-package gptel model/backend selection
+- Safer defaults for plain-text responses without reasoning payloads
+- A visible =Generating...= placeholder in commit buffers while the
+  request is running
+- Regeneration that clears previous editable commit text while keeping
+  Git's comment/instruction section intact
 
 * Installation
 
@@ -25,6 +50,9 @@ time, for example:
     :hook (magit-mode . gptel-magit-install))
 #+end_src
 
+If you are using this fork directly instead of the original repository,
+point your package recipe at =roife/gptel-magit=.
+
 * Usage
 
 ** Commit messages
@@ -35,6 +63,12 @@ You can generate a commit message in two ways:
    commit with a pre-generated message.
 2. In an already started git-commit buffer, you can press =M-g= to
    generate a message.
+
+When generation starts in a commit buffer, gptel-magit inserts a
+temporary =Generating...= hint immediately so it is obvious that the
+request is in progress. If you generate again, the previous editable
+message text is cleared before inserting the new result, while Magit's
+commented guidance remains untouched.
 
 You can also provide extra rationale for why a change was made:
 
@@ -65,6 +99,8 @@ Useful options include:
   prompts.
 - =gptel-magit-body-length= for adding body line-length guidance when
   using the Conventional Commits prompt.
+- =gptel-magit-model= and =gptel-magit-backend= for using a different
+  model or backend just for gptel-magit requests.
 - =gptel-magit-streaming= to control whether commit messages are
   inserted incrementally as the model responds.
 - =gptel-magit-include-reasoning= to opt into model reasoning output.
