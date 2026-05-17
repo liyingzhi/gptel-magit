@@ -208,6 +208,60 @@ STYLE-NAME must exist in `gptel-magit-commit-styles-alist`."
       (fill-region (point-min) end-of-first-line))
     (buffer-string)))
 
+(defun gptel-magit--commit-message-comment-regexps ()
+  "Return regexps matching Git's generated commit comment lines."
+  (delq nil
+        (list
+         (when (and comment-start-skip
+                    (not (string= comment-start-skip "")))
+           (concat "^[ \t]*" comment-start-skip))
+         (when (and comment-start
+                    (not (string= comment-start "")))
+           (concat "^[ \t]*" (regexp-quote comment-start)))
+         "^[ \t]*#")))
+
+(defun gptel-magit--commit-message-end ()
+  "Return the end of editable commit message text."
+  (save-excursion
+    (catch 'end
+      (dolist (comment-regexp (gptel-magit--commit-message-comment-regexps))
+        (goto-char (point-min))
+        (when (re-search-forward comment-regexp nil t)
+          (throw 'end (line-beginning-position))))
+      (point-max))))
+
+(defun gptel-magit--clear-commit-message ()
+  "Delete existing editable commit message text.
+
+Git's generated comment/instruction section is preserved."
+  (let ((inhibit-read-only t))
+    (delete-region (point-min) (gptel-magit--commit-message-end))
+    (goto-char (point-min))
+    (when (not (eobp))
+      (insert "\n\n")
+      (goto-char (point-min)))))
+
+(defun gptel-magit--insert-commit-message (message)
+  "Insert generated commit MESSAGE at point.
+
+If Git's generated comments follow point, keep them on a separate line."
+  (let ((inhibit-read-only t))
+    (insert message)
+    (when (and (not (bolp))
+               (not (eobp))
+               (not (looking-at-p "\n")))
+      (insert "\n"))))
+
+(defun gptel-magit--replace-commit-message (message)
+  "Replace existing editable commit message text with MESSAGE."
+  (gptel-magit--clear-commit-message)
+  (gptel-magit--insert-commit-message message))
+
+(defun gptel-magit--prepare-commit-message-replacement ()
+  "Clear commit text and return markers around generated text."
+  (gptel-magit--clear-commit-message)
+  (cons (copy-marker (point-min)) (copy-marker (point-min))))
+
 (defun gptel-magit--request (&rest args)
   "Call `gptel-request` with ARGS.
 
@@ -230,12 +284,14 @@ Optional RATIONALE provides extra context for why the change was made."
                    diff))
          (commit-buffer (magit-commit-message-buffer))
          (acc "")
+         (commit-message-cleared nil)
          (start-marker nil)
          (end-marker nil))
     (when commit-buffer
       (with-current-buffer commit-buffer
-        (setq start-marker (copy-marker (point-min)))
-        (setq end-marker (copy-marker (point-min)))))
+        (save-excursion
+          (setq start-marker (copy-marker (point-min)))
+          (setq end-marker (copy-marker (point-min))))))
     (gptel-magit--request prompt
       :system (gptel-magit--get-commit-prompt)
       :context nil
@@ -250,9 +306,16 @@ Optional RATIONALE provides extra context for why the change was made."
             (when (buffer-live-p commit-buffer)
               (with-current-buffer commit-buffer
                 (save-excursion
-                  (goto-char end-marker)
-                  (insert response)
-                  (set-marker end-marker (point))))))
+                  (let ((inhibit-read-only t))
+                    (unless commit-message-cleared
+                      (let ((markers
+                             (gptel-magit--prepare-commit-message-replacement)))
+                        (setq start-marker (car markers))
+                        (setq end-marker (cdr markers))
+                        (setq commit-message-cleared t)))
+                    (goto-char end-marker)
+                    (insert response)
+                    (set-marker end-marker (point)))))))
            ((plist-get info :stream)
             nil)
            (t
@@ -263,9 +326,16 @@ Optional RATIONALE provides extra context for why the change was made."
                 (when (buffer-live-p commit-buffer)
                   (with-current-buffer commit-buffer
                     (save-excursion
-                      (delete-region start-marker end-marker)
-                      (goto-char start-marker)
-                      (insert message))))
+                      (let ((inhibit-read-only t))
+                        (unless commit-message-cleared
+                          (let ((markers
+                                 (gptel-magit--prepare-commit-message-replacement)))
+                            (setq start-marker (car markers))
+                            (setq end-marker (cdr markers))
+                            (setq commit-message-cleared t)))
+                        (delete-region start-marker end-marker)
+                        (goto-char start-marker)
+                        (gptel-magit--insert-commit-message message)))))
               (funcall callback message))))
          ((and (consp response) (eq (car response) 'reasoning))
           nil)
@@ -278,10 +348,12 @@ Optional RATIONALE provides extra context for why the change was made."
   (unless (magit-commit-message-buffer)
     (user-error "No commit in progress"))
   (gptel-magit--generate (lambda (message)
-                           (with-current-buffer (magit-commit-message-buffer)
-                             (save-excursion
-                               (goto-char (point-min))
-                               (insert message)))))
+                           (let ((buffer (magit-commit-message-buffer)))
+                             (when (buffer-live-p buffer)
+                               (with-current-buffer buffer
+                                 (save-excursion
+                                   (gptel-magit--replace-commit-message
+                                    message)))))))
   (message "magit-gptel: Generating commit message..."))
 
 (defun gptel-magit-commit-generate (&optional args)
@@ -375,8 +447,7 @@ Uses ARGS from transient mode."
        (when (buffer-live-p gptel-magit--current-commit-buffer)
          (with-current-buffer gptel-magit--current-commit-buffer
            (save-excursion
-             (goto-char (point-min))
-             (insert message)))))
+             (gptel-magit--replace-commit-message message)))))
      rationale)
     (message "magit-gptel: Generating commit message with rationale...")))
 
