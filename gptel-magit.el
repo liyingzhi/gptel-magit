@@ -72,24 +72,23 @@ Follow good Git style:
   "A prompt adapted from Zed (https://github.com/zed-industries/zed/blob/main/crates/git_ui/src/commit_message_prompt.txt).")
 
 (defconst gptel-magit-prompt-conventional-commits
-  "You are an expert at writing Git commits. Your job is to write a short clear commit message that summarizes the changes.
+  "You are an expert at writing Git commits. Write a short clear commit message that summarizes the changes.
 
-The commit message should be structured as follows:
+Format:
 
     <type>(<optional scope>): <description>
 
     [optional body]
 
-- Commits MUST be prefixed with a type, which consists of one of the followings words: build, chore, ci, docs, feat, fix, perf, refactor, style, test
-- The type feat MUST be used when a commit adds a new feature
-- The type fix MUST be used when a commit represents a bug fix
-- An optional scope MAY be provided after a type. A scope is a phrase describing a section of the codebase enclosed in parenthesis, e.g., fix(parser):
-- A description MUST immediately follow the type/scope prefix. The description is a short description of the code changes, e.g., fix: array parsing issue when multiple spaces were contained in string.
-- Try to limit the whole subject line to 60 characters
-- Capitalize the subject line
-- Do not end the subject line with any punctuation
-- A longer commit body MAY be provided after the short description, providing additional contextual information about the code changes. The body MUST begin one blank line after the description.
-- Use the imperative mood in the subject line
+Rules:
+- MUST be prefixed with a type: build, chore, ci, docs, feat, fix, perf, refactor, style, test
+- MUST use `feat` for new features
+- MUST use `fix` for bug fixes
+- Scope is optional and goes in parentheses, describing modified section of the codebase, e.g. `fix(parser):`
+- A short description of changes MUST immediately follow the type/scope prefix, e.g., `fix: array parsing issue with multiple spaces`
+- Keep the subject imperative, capitalized, and under 60 characters
+- Do not end the subject line with punctuation
+- MAY add a body separated by one blank line after the short description, providing additional contextual infomation about changes.
 - Keep the body short and concise (omit it entirely if not useful)"
   "A prompt adapted from Conventional Commits (https://www.conventionalcommits.org/en/v1.0.0/).")
 
