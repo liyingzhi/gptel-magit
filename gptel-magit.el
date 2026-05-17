@@ -163,6 +163,9 @@ See `gptel-backend` for documentation."
 (defvar gptel-magit--current-commit-buffer nil
   "Commit message buffer associated with rationale input.")
 
+(defvar-local gptel-magit--generation-overlay nil
+  "Overlay used to show commit message generation progress.")
+
 
 (defun gptel-magit-set-commit-style (style-name)
   "Set `gptel-magit-commit-prompt` from STYLE-NAME.
@@ -257,10 +260,45 @@ If Git's generated comments follow point, keep them on a separate line."
   (gptel-magit--clear-commit-message)
   (gptel-magit--insert-commit-message message))
 
+(defun gptel-magit--delete-generation-overlay ()
+  "Delete any active commit generation progress overlay."
+  (when (overlayp gptel-magit--generation-overlay)
+    (delete-overlay gptel-magit--generation-overlay))
+  (setq gptel-magit--generation-overlay nil))
+
+(defun gptel-magit--show-generation-overlay ()
+  "Show a temporary commit generation progress overlay."
+  (gptel-magit--delete-generation-overlay)
+  (setq gptel-magit--generation-overlay
+        (make-overlay (point-min) (if (< (point-min) (point-max))
+                                      (1+ (point-min))
+                                    (point-min))
+                      nil nil t))
+  (overlay-put gptel-magit--generation-overlay
+               'before-string
+               (propertize "Generating..." 'face 'shadow)))
+
 (defun gptel-magit--prepare-commit-message-replacement ()
   "Clear commit text and return markers around generated text."
   (gptel-magit--clear-commit-message)
   (cons (copy-marker (point-min)) (copy-marker (point-min))))
+
+(defun gptel-magit--prepare-commit-message-generation ()
+  "Prepare commit buffer for generation and show progress.
+
+Return markers around generated text."
+  (let ((markers (gptel-magit--prepare-commit-message-replacement)))
+    (gptel-magit--show-generation-overlay)
+    markers))
+
+(defun gptel-magit--finish-commit-message-generation
+    (message start-marker end-marker)
+  "Replace generated text between START-MARKER and END-MARKER with MESSAGE."
+  (let ((inhibit-read-only t))
+    (gptel-magit--delete-generation-overlay)
+    (delete-region start-marker end-marker)
+    (goto-char start-marker)
+    (gptel-magit--insert-commit-message message)))
 
 (defun gptel-magit--request (&rest args)
   "Call `gptel-request` with ARGS.
@@ -290,8 +328,10 @@ Optional RATIONALE provides extra context for why the change was made."
     (when commit-buffer
       (with-current-buffer commit-buffer
         (save-excursion
-          (setq start-marker (copy-marker (point-min)))
-          (setq end-marker (copy-marker (point-min))))))
+          (let ((markers (gptel-magit--prepare-commit-message-generation)))
+            (setq start-marker (car markers))
+            (setq end-marker (cdr markers))
+            (setq commit-message-cleared t)))))
     (gptel-magit--request prompt
       :system (gptel-magit--get-commit-prompt)
       :context nil
@@ -313,33 +353,42 @@ Optional RATIONALE provides extra context for why the change was made."
                         (setq start-marker (car markers))
                         (setq end-marker (cdr markers))
                         (setq commit-message-cleared t)))
+                    (gptel-magit--delete-generation-overlay)
                     (goto-char end-marker)
                     (insert response)
                     (set-marker end-marker (point)))))))
            ((plist-get info :stream)
             nil)
            (t
-            (funcall callback (gptel-magit--format-commit-message acc)))))
+            (let ((message (gptel-magit--format-commit-message acc)))
+              (if (and commit-buffer start-marker end-marker)
+                  (when (buffer-live-p commit-buffer)
+                    (with-current-buffer commit-buffer
+                      (save-excursion
+                        (gptel-magit--finish-commit-message-generation
+                         message start-marker end-marker))))
+                (funcall callback message))))))
          ((eq response t)
           (let ((message (gptel-magit--format-commit-message acc)))
             (if (and commit-buffer start-marker end-marker)
                 (when (buffer-live-p commit-buffer)
                   (with-current-buffer commit-buffer
                     (save-excursion
-                      (let ((inhibit-read-only t))
-                        (unless commit-message-cleared
-                          (let ((markers
-                                 (gptel-magit--prepare-commit-message-replacement)))
-                            (setq start-marker (car markers))
-                            (setq end-marker (cdr markers))
-                            (setq commit-message-cleared t)))
-                        (delete-region start-marker end-marker)
-                        (goto-char start-marker)
-                        (gptel-magit--insert-commit-message message)))))
+                      (unless commit-message-cleared
+                        (let ((markers
+                               (gptel-magit--prepare-commit-message-replacement)))
+                          (setq start-marker (car markers))
+                          (setq end-marker (cdr markers))
+                          (setq commit-message-cleared t)))
+                      (gptel-magit--finish-commit-message-generation
+                       message start-marker end-marker))))
               (funcall callback message))))
          ((and (consp response) (eq (car response) 'reasoning))
           nil)
          ((or (null response) (eq response 'abort))
+          (when (and commit-buffer (buffer-live-p commit-buffer))
+            (with-current-buffer commit-buffer
+              (gptel-magit--delete-generation-overlay)))
           (gptel-magit--request-error info)))))))
 
 (defun gptel-magit-generate-message ()
