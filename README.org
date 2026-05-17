@@ -103,6 +103,4 @@ Useful options include:
   model or backend just for gptel-magit requests.
 - =gptel-magit-streaming= to control whether commit messages are
   inserted incrementally as the model responds.
-- =gptel-magit-include-reasoning= to opt into model reasoning output.
-  It defaults to =nil= because gptel-magit expects plain text responses
-  for commit messages and diff explanations.
+
