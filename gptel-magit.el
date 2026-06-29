@@ -469,7 +469,9 @@ Uses ARGS from transient mode."
     (insert ";;; Press C-c C-c to generate commit message, C-c C-k to cancel\n")
     (insert ";;; Leave empty to generate without rationale\n\n")
     (add-text-properties (point-min) (point)
-                         '(face font-lock-comment-face read-only t))
+                         '(face font-lock-comment-face
+                                read-only t
+                                rear-nonsticky (read-only)))
     (goto-char (point-max))))
 
 
